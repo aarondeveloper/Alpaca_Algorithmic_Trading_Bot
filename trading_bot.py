@@ -79,19 +79,81 @@ class RobinhoodBot:
             self.logger.error(f"Error calculating SMA for {symbol}: {str(e)}")
             return None
 
+    def get_crypto_balance(self, symbol):
+        try:
+            positions = rh.crypto.get_crypto_positions()
+            for position in positions:
+                if position['currency']['code'] == symbol:
+                    return float(position['quantity'])
+            return 0.0
+        except Exception as e:
+            self.logger.error(f"Error getting balance for {symbol}: {str(e)}")
+            return None
+
+    def get_buying_power(self):
+        try:
+            profile = rh.profiles.load_account_profile()
+            return float(profile['crypto_buying_power'])
+        except Exception as e:
+            self.logger.error(f"Error getting buying power: {str(e)}")
+            return None
+
     def run_strategy(self, symbol, amount):
+        last_trade_time = None
+        last_price = None
+        MIN_TRADE_INTERVAL = 120  # 2 minutes in seconds
+        
+        self.logger.info(f"Starting trading bot for {symbol}")
+        self.logger.info(f"Trading amount: ${amount}")
+        self.logger.info("Monitoring prices...")
+        
         while True:
             try:
+                # Check if enough time has passed since last trade
+                if last_trade_time:
+                    time_since_trade = time.time() - last_trade_time
+                    if time_since_trade < MIN_TRADE_INTERVAL:
+                        time.sleep(5)
+                        continue
+                    
                 current_price = self.get_current_price(symbol)
                 sma = self.simple_moving_average(symbol)
+                buying_power = self.get_buying_power()
 
-                if current_price and sma:
-                    if current_price < sma * 0.95:  # Buy if price is 5% below SMA
+                if current_price and sma and buying_power is not None:
+                    # Calculate price drop percentage if we have a last price
+                    price_drop_percent = ((last_price - current_price) / last_price * 100) if last_price else 0
+                    
+                    # Log current status every iteration
+                    self.logger.info(f"Current Status:")
+                    self.logger.info(f"  - BTC Price: ${current_price:,.2f}")
+                    self.logger.info(f"  - SMA Price: ${sma:,.2f}")
+                    self.logger.info(f"  - Price vs SMA: {((current_price/sma - 1) * 100):,.2f}%")
+                    if last_price:
+                        self.logger.info(f"  - Price Change: {-price_drop_percent:,.2f}%")
+                    self.logger.info(f"  - Buying Power: ${buying_power:,.2f}")
+
+                    # Buy conditions
+                    sma_condition = current_price < sma * 0.95
+                    drop_condition = price_drop_percent >= 1.0
+                    
+                    if buying_power >= amount and (sma_condition or drop_condition):
+                        self.logger.info("Buy conditions met!")
+                        if sma_condition:
+                            self.logger.info("  - Price is below 5% of SMA")
+                        if drop_condition:
+                            self.logger.info("  - Price dropped more than 1%")
+                            
                         self.place_buy_order(symbol, amount)
-                    elif current_price > sma * 1.05:  # Sell if price is 5% above SMA
-                        self.place_sell_order(symbol, amount)
+                        last_trade_time = time.time()
+                        self.logger.info(f"Order placed successfully")
+                        self.logger.info(f"Next trade possible in {MIN_TRADE_INTERVAL/60:.1f} minutes")
+                    else:
+                        self.logger.info("No buy conditions met, continuing to monitor...")
 
-                time.sleep(60)  # Wait for 1 minute before next check
+                # Update last price for next iteration
+                last_price = current_price
+                time.sleep(10)  # Check conditions every 10 seconds
             except Exception as e:
                 self.logger.error(f"Error in trading strategy: {str(e)}")
                 time.sleep(60)
