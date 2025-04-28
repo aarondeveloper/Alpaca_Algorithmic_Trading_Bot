@@ -77,4 +77,19 @@ class MarketData:
             return min(prices), max(prices)
         except Exception as e:
             self.logger.error(f"Error getting daily range: {str(e)}")
+            return None
+
+    def get_hourly_prices(self, symbol):
+        """Get hourly price data"""
+        try:
+            request = CryptoBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Hour,
+                start=datetime.now() - timedelta(hours=24),
+                end=datetime.now()
+            )
+            bars = self.client.get_crypto_bars(request)
+            return [bar.close for bar in bars[symbol]]
+        except Exception as e:
+            self.logger.error(f"Error getting hourly prices: {str(e)}")
             return None 
