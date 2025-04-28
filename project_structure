@@ -1,0 +1,11 @@
+trading_bot/
+├── config/
+│   └── settings.py
+├── utils/
+│   └── logger.py
+├── trading/
+│   ├── __init__.py
+│   ├── client.py
+│   ├── data.py
+│   └── strategy.py
+└── main.py 
