@@ -1,21 +1,29 @@
-import robin_stocks.robinhood as rh
-import pyotp
-import datetime
+import os
+from alpaca.trading.client import TradingClient
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide
 import time
 import logging
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-import os
 
-# Load environment variables
-load_dotenv()
-
-class RobinhoodBot:
-    def __init__(self, username, password, totp_key=None):
-        self.username = username
-        self.password = password
-        self.totp_key = totp_key
+class AlpacaTradingBot:
+    def __init__(self):
+        load_dotenv()
+        
+        # Initialize clients
+        self.trading_client = TradingClient(
+            os.getenv('ALPACA_API_KEY'), 
+            os.getenv('ALPACA_SECRET_KEY'),
+            paper=True  # Set to False for real trading
+        )
+        self.data_client = CryptoHistoricalDataClient()
         self.logger = self._setup_logger()
-        self.login()
+        
+        self.logger.info("Trading bot initialized")
 
     def _setup_logger(self):
         logging.basicConfig(
@@ -28,74 +36,51 @@ class RobinhoodBot:
         )
         return logging.getLogger(__name__)
 
-    def login(self):
-        try:
-            if self.totp_key:
-                totp = pyotp.TOTP(self.totp_key).now()
-                rh.login(self.username, self.password, mfa_code=totp)
-            else:
-                rh.login(self.username, self.password)
-            self.logger.info("Successfully logged in to Robinhood")
-        except Exception as e:
-            self.logger.error(f"Failed to log in: {str(e)}")
-            raise
-
     def get_current_price(self, symbol):
         try:
-            # Use crypto quote endpoint for Bitcoin
-            price_data = rh.crypto.get_crypto_quote(symbol)
-            return float(price_data['mark_price'])
+            # Get the latest bar
+            request = CryptoBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Minute,
+                start=datetime.now() - timedelta(minutes=5),
+                end=datetime.now()
+            )
+            bars = self.data_client.get_crypto_bars(request)
+            latest_bar = bars[symbol][-1]
+            return latest_bar.close
         except Exception as e:
             self.logger.error(f"Error getting price for {symbol}: {str(e)}")
             return None
 
-    def place_buy_order(self, symbol, amount):
+    def get_simple_moving_average(self, symbol, timeframe=TimeFrame.Hour, window=24):
         try:
-            # Use crypto specific order method
-            order = rh.orders.order_buy_crypto_by_price(symbol, amount)
-            self.logger.info(f"Placed buy order for ${amount} worth of {symbol}")
-            return order
-        except Exception as e:
-            self.logger.error(f"Error placing buy order for {symbol}: {str(e)}")
-            return None
-
-    def place_sell_order(self, symbol, amount):
-        try:
-            # Use crypto specific order method
-            order = rh.orders.order_sell_crypto_by_price(symbol, amount)
-            self.logger.info(f"Placed sell order for ${amount} worth of {symbol}")
-            return order
-        except Exception as e:
-            self.logger.error(f"Error placing sell order for {symbol}: {str(e)}")
-            return None
-
-    def simple_moving_average(self, symbol, interval='day', span='week'):
-        try:
-            # Use crypto specific historicals
-            historical_data = rh.crypto.get_crypto_historicals(symbol, interval=interval, span=span)
-            prices = [float(data['close_price']) for data in historical_data]
+            # Get historical data
+            request = CryptoBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=timeframe,
+                start=datetime.now() - timedelta(hours=window),
+                end=datetime.now()
+            )
+            bars = self.data_client.get_crypto_bars(request)
+            prices = [bar.close for bar in bars[symbol]]
             return sum(prices) / len(prices)
         except Exception as e:
             self.logger.error(f"Error calculating SMA for {symbol}: {str(e)}")
             return None
 
-    def get_crypto_balance(self, symbol):
+    def place_buy_order(self, symbol, amount):
         try:
-            positions = rh.crypto.get_crypto_positions()
-            for position in positions:
-                if position['currency']['code'] == symbol:
-                    return float(position['quantity'])
-            return 0.0
+            # Create market order
+            order_data = MarketOrderRequest(
+                symbol=symbol,
+                notional=amount,  # Amount in dollars
+                side=OrderSide.BUY
+            )
+            order = self.trading_client.submit_order(order_data)
+            self.logger.info(f"Placed buy order for ${amount} of {symbol}")
+            return order
         except Exception as e:
-            self.logger.error(f"Error getting balance for {symbol}: {str(e)}")
-            return None
-
-    def get_buying_power(self):
-        try:
-            profile = rh.profiles.load_account_profile()
-            return float(profile['crypto_buying_power'])
-        except Exception as e:
-            self.logger.error(f"Error getting buying power: {str(e)}")
+            self.logger.error(f"Error placing buy order: {str(e)}")
             return None
 
     def run_strategy(self, symbol, amount):
@@ -105,28 +90,26 @@ class RobinhoodBot:
         
         self.logger.info(f"Starting trading bot for {symbol}")
         self.logger.info(f"Trading amount: ${amount}")
-        self.logger.info("Monitoring prices...")
         
         while True:
             try:
-                # Check if enough time has passed since last trade
-                if last_trade_time:
-                    time_since_trade = time.time() - last_trade_time
-                    if time_since_trade < MIN_TRADE_INTERVAL:
-                        time.sleep(5)
-                        continue
-                    
-                current_price = self.get_current_price(symbol)
-                sma = self.simple_moving_average(symbol)
-                buying_power = self.get_buying_power()
+                # Check trading interval
+                if last_trade_time and (time.time() - last_trade_time) < MIN_TRADE_INTERVAL:
+                    time.sleep(5)
+                    continue
 
-                if current_price and sma and buying_power is not None:
-                    # Calculate price drop percentage if we have a last price
+                current_price = self.get_current_price(symbol)
+                sma = self.get_simple_moving_average(symbol)
+                account = self.trading_client.get_account()
+                buying_power = float(account.buying_power)
+
+                if current_price and sma and buying_power:
+                    # Calculate price drop percentage
                     price_drop_percent = ((last_price - current_price) / last_price * 100) if last_price else 0
                     
-                    # Log current status every iteration
-                    self.logger.info(f"Current Status:")
-                    self.logger.info(f"  - BTC Price: ${current_price:,.2f}")
+                    # Log current status
+                    self.logger.info(f"\nCurrent Status:")
+                    self.logger.info(f"  - {symbol} Price: ${current_price:,.2f}")
                     self.logger.info(f"  - SMA Price: ${sma:,.2f}")
                     self.logger.info(f"  - Price vs SMA: {((current_price/sma - 1) * 100):,.2f}%")
                     if last_price:
@@ -134,39 +117,25 @@ class RobinhoodBot:
                     self.logger.info(f"  - Buying Power: ${buying_power:,.2f}")
 
                     # Buy conditions
-                    sma_condition = current_price < sma * 0.95
-                    drop_condition = price_drop_percent >= 1.0
-                    
-                    if buying_power >= amount and (sma_condition or drop_condition):
-                        self.logger.info("Buy conditions met!")
-                        if sma_condition:
-                            self.logger.info("  - Price is below 5% of SMA")
-                        if drop_condition:
-                            self.logger.info("  - Price dropped more than 1%")
-                            
+                    if buying_power >= amount and (
+                        current_price < sma * 0.95 or  # Price 5% below SMA
+                        price_drop_percent >= 1.0      # Price dropped 1% or more
+                    ):
                         self.place_buy_order(symbol, amount)
                         last_trade_time = time.time()
-                        self.logger.info(f"Order placed successfully")
-                        self.logger.info(f"Next trade possible in {MIN_TRADE_INTERVAL/60:.1f} minutes")
-                    else:
-                        self.logger.info("No buy conditions met, continuing to monitor...")
+                        self.logger.info("Buy order placed!")
 
-                # Update last price for next iteration
                 last_price = current_price
-                time.sleep(10)  # Check conditions every 10 seconds
+                time.sleep(10)
+
             except Exception as e:
                 self.logger.error(f"Error in trading strategy: {str(e)}")
                 time.sleep(60)
 
 if __name__ == "__main__":
-    # Get credentials from environment variables
-    USERNAME = os.getenv('RH_USERNAME')
-    PASSWORD = os.getenv('RH_PASSWORD')
-    TOTP_KEY = os.getenv('RH_TOTP_KEY')
-
     # Trading parameters
-    SYMBOL = "BTC"  # Bitcoin
+    SYMBOL = "BTC/USD"
     AMOUNT = 1.00  # Trading $1 worth of Bitcoin
 
-    bot = RobinhoodBot(USERNAME, PASSWORD, TOTP_KEY)
-    bot.run_strategy(SYMBOL, AMOUNT) 
+    bot = AlpacaTradingBot()
+    bot.run_strategy(SYMBOL, AMOUNT)
