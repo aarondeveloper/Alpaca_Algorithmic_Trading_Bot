@@ -9,8 +9,45 @@ class TradingStrategy:
         self.logger = logger
         self.last_trade_time = None
         self.last_price = None
-        self.price_history = []  # Store recent prices
-        self.local_lows = []    # Store local minimum prices
+        self.price_history = []  # Store recent minute prices
+        self.hourly_lows = []   # Store hourly lows
+
+    def analyze_hourly_pattern(self, current_price):
+        """Analyze hourly price patterns"""
+        try:
+            hourly_prices = self.market_data.get_hourly_prices("BTC/USD")
+            if not hourly_prices:
+                return None, None
+
+            # Calculate hourly lows for the last 24 hours
+            self.hourly_lows = []
+            for i in range(0, len(hourly_prices), 1):
+                self.hourly_lows.append(min(hourly_prices[i:i+1]))
+
+            # Get recent low prices
+            last_hour_low = self.hourly_lows[-1] if self.hourly_lows else current_price
+            prev_hour_low = self.hourly_lows[-2] if len(self.hourly_lows) > 1 else last_hour_low
+            
+            # Calculate price metrics
+            price_from_hour_low = ((current_price - last_hour_low) / last_hour_low) * 100
+            hour_low_change = ((last_hour_low - prev_hour_low) / prev_hour_low) * 100
+
+            self.logger.info("\nHourly Low Analysis:")
+            self.logger.info(f"  Current Price: ${current_price:,.2f}")
+            self.logger.info(f"  Current Hour Low: ${last_hour_low:,.2f}")
+            self.logger.info(f"  Previous Hour Low: ${prev_hour_low:,.2f}")
+            self.logger.info(f"  % Above Current Hour Low: {price_from_hour_low:.2f}%")
+            self.logger.info(f"  Hour-to-Hour Low Change: {hour_low_change:.2f}%")
+
+            # Calculate average hourly low
+            avg_hourly_low = sum(self.hourly_lows) / len(self.hourly_lows)
+            self.logger.info(f"  24h Average Hour Low: ${avg_hourly_low:.2f}")
+
+            return last_hour_low, price_from_hour_low, hour_low_change
+
+        except Exception as e:
+            self.logger.error(f"Error in hourly analysis: {str(e)}")
+            return None, None, None
 
     def is_local_minimum(self, prices, center_idx, window=5):
         """Check if price point is a local minimum within window"""
@@ -21,57 +58,42 @@ class TradingStrategy:
         left_prices = prices[center_idx - window//2:center_idx]
         right_prices = prices[center_idx + 1:center_idx + window//2 + 1]
         
-        # Check if center price is lower than surrounding prices
         return all(center_price <= p for p in left_prices) and all(center_price <= p for p in right_prices)
 
-    def analyze_price_levels(self, current_price):
-        """Analyze different timeframe support levels"""
-        daily_low, daily_high = self.market_data.get_daily_price_range("BTC/USD")
-        hourly_data = self.market_data.get_hourly_prices("BTC/USD")
-        
-        # Calculate price position
-        daily_range = daily_high - daily_low
-        price_from_low = ((current_price - daily_low) / daily_range) * 100
-        
-        self.logger.info("\nPrice Level Analysis:")
-        self.logger.info(f"  24h High: ${daily_high:,.2f}")
-        self.logger.info(f"  24h Low: ${daily_low:,.2f}")
-        self.logger.info(f"  Current price is {price_from_low:.1f}% above daily low")
-        
-        return daily_low, daily_high, price_from_low
-
-    def should_buy(self, current_price, price_from_low):
-        """Determine if we should buy based on dip analysis"""
+    def should_buy(self, current_price):
+        """Determine if we should buy based on hourly lows analysis"""
         # Add current price to history
         self.price_history.append(current_price)
-        if len(self.price_history) > 30:  # Keep last 30 prices
+        if len(self.price_history) > 30:  # Keep last 30 minute prices
             self.price_history.pop(0)
 
-        # Check for local minimum
+        # Get hourly analysis
+        hour_low, price_from_hour_low, hour_low_change = self.analyze_hourly_pattern(current_price)
+        if hour_low is None:
+            return False
+
+        # Check for local minimum in recent prices
         is_local_min = False
         if len(self.price_history) >= 5:
             is_local_min = self.is_local_minimum(
                 self.price_history, 
-                len(self.price_history) - 3  # Check if recent price was minimum
+                len(self.price_history) - 3
             )
-            if is_local_min:
-                self.local_lows.append(current_price)
-                if len(self.local_lows) > 5:  # Keep last 5 local lows
-                    self.local_lows.pop(0)
 
         # Buying conditions
-        price_near_daily_low = price_from_low <= 20  # Within 20% of daily low
+        price_near_hour_low = price_from_hour_low <= 0.5  # Within 0.5% of hour's low
+        hourly_lows_dropping = hour_low_change < -0.1  # Hour's low is dropping
         found_local_minimum = is_local_min
-        trending_higher_lows = (len(self.local_lows) >= 2 and 
-                              self.local_lows[-1] > self.local_lows[0])
 
         self.logger.info("\nBuy Signal Analysis:")
-        self.logger.info(f"  Near Daily Low: {price_near_daily_low}")
+        self.logger.info(f"  Near Hour's Low: {price_near_hour_low}")
+        self.logger.info(f"  Hourly Lows Dropping: {hourly_lows_dropping}")
         self.logger.info(f"  Local Minimum Found: {found_local_minimum}")
-        self.logger.info(f"  Higher Lows Trend: {trending_higher_lows}")
 
-        # Buy if price is near daily low OR we found a local minimum
-        return price_near_daily_low or (found_local_minimum and trending_higher_lows)
+        # Buy if price is near hour's low AND either:
+        # 1. Hourly lows are dropping (catching a dip)
+        # 2. OR we found a local minimum
+        return price_near_hour_low and (hourly_lows_dropping or found_local_minimum)
 
     def execute(self, symbol, amount):
         try:
@@ -87,21 +109,15 @@ class TradingStrategy:
                 return False
 
             buying_power = account_info['buying_power']
-            daily_low, daily_high, price_from_low = self.analyze_price_levels(current_price)
 
-            if buying_power >= amount and self.should_buy(current_price, price_from_low):
-                self.logger.info("\n*** DIP BUYING OPPORTUNITY DETECTED ***")
-                if price_from_low <= 20:
-                    self.logger.info("Reason: Price near daily low - good value buy")
-                else:
-                    self.logger.info("Reason: Local minimum detected with higher lows trend")
-                
+            if buying_power >= amount and self.should_buy(current_price):
+                self.logger.info("\n*** HOURLY LOW BUYING OPPORTUNITY ***")
                 order = self.trading_client.place_buy_order(symbol, amount)
                 if order:
                     self.last_trade_time = time.time()
                     self.logger.info(f"Next trade possible in: {MIN_TRADE_INTERVAL/60:.1f} minutes")
             else:
-                self.logger.info("\nWaiting for better dip buying opportunity")
+                self.logger.info("\nWaiting for better hourly low entry")
 
             self.last_price = current_price
             return True

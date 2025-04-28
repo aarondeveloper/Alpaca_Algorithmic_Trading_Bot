@@ -1,6 +1,6 @@
 from alpaca.trading.client import TradingClient as AlpacaClient
 from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide
+from alpaca.trading.enums import OrderSide, TimeInForce
 from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, PAPER_TRADING
 
 class AlpacaTradingClient:
@@ -29,9 +29,11 @@ class AlpacaTradingClient:
             
             order_data = MarketOrderRequest(
                 symbol=symbol,
-                notional=amount,
-                side=OrderSide.BUY
+                notional=amount,  # Amount in dollars
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.GTC  # Good Till Cancelled
             )
+            
             order = self.client.submit_order(order_data)
             
             self.logger.info("\nOrder Submitted Successfully:")

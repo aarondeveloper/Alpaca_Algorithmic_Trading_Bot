@@ -11,7 +11,7 @@ PAPER_TRADING = True
 
 # Trading Parameters
 SYMBOL = "BTC/USD"
-TRADE_AMOUNT = 1.00
+TRADE_AMOUNT = 10.00  # Minimum $10 for crypto
 MIN_TRADE_INTERVAL = 120  # 2 minutes
 
 # Strategy Parameters
