@@ -10,6 +10,7 @@ import threading
 
 class MarketData:
     def __init__(self, logger):
+        # Keep the client for hourly/daily data
         self.client = CryptoHistoricalDataClient(
             api_key=ALPACA_API_KEY,
             secret_key=ALPACA_SECRET_KEY
@@ -24,13 +25,10 @@ class MarketData:
         
         # Start the WebSocket stream in a background thread
         self._start_crypto_stream()
-        
-        # Load initial history
-        self._load_initial_minute_history("BTC/USD")
 
     def _start_crypto_stream(self):
         """Start the WebSocket stream in a background thread"""
-        self.logger.info("Starting WebSocket stream for real-time data...")
+        self.logger.info(f"Starting WebSocket stream for real-time data (will build {MINUTE_SMA_WINDOW}-min SMA over time)...")
         
         # Define the WebSocket handlers
         async def handle_bar(bar):
@@ -40,13 +38,12 @@ class MarketData:
             # Update our minute history with this latest bar
             self.minute_closes.append(bar.close)
             # Recalculate SMA
-            self.minute_sma = sum(self.minute_closes) / len(self.minute_closes)
+            if len(self.minute_closes) > 0:
+                self.minute_sma = sum(self.minute_closes) / len(self.minute_closes)
+                self.stream_ready = True
             
-            self.logger.info(f"\n[STREAM] New bar @ {bar.timestamp}")
-            self.logger.info(f"  Close: ${bar.close:,.2f}")
-            self.logger.info(f"  Volume: {bar.volume:,.6f}")
-            self.logger.info(f"  {MINUTE_SMA_WINDOW}-min SMA: ${self.minute_sma:,.2f}")
-            self.stream_ready = True
+            # More concise logging
+            self.logger.info(f"[STREAM] New bar: ${bar.close:,.2f} | {len(self.minute_closes)}/{MINUTE_SMA_WINDOW}-min SMA: ${self.minute_sma:,.2f}")
         
         async def handle_update(bar):
             self.latest_bar = bar
@@ -76,44 +73,13 @@ class MarketData:
         stream_thread.start()
         self.logger.info("WebSocket stream thread started")
 
-    def _load_initial_minute_history(self, symbol):
-        """Load initial price history once at startup"""
-        try:
-            self.logger.info(f"Loading initial {MINUTE_SMA_WINDOW}-minute history...")
-            now = datetime.utcnow()
-            start = now - timedelta(minutes=MINUTE_SMA_WINDOW)
-            req = CryptoBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Minute,
-                start=start,
-                end=now,
-                limit=MINUTE_SMA_WINDOW
-            )
-            resp = self.client.get_crypto_bars(req)
-            bars = resp.get(symbol, [])
-            
-            # Clear and refill our deque with historical closes
-            self.minute_closes.clear()
-            for bar in bars:
-                self.minute_closes.append(bar.close)
-                
-            # Calculate initial SMA
-            if len(self.minute_closes) > 0:
-                self.minute_sma = sum(self.minute_closes) / len(self.minute_closes)
-                self.logger.info(f"Loaded {len(self.minute_closes)} minute bars")
-                self.logger.info(f"Initial {MINUTE_SMA_WINDOW}-min SMA: {self.minute_sma:.2f}")
-            else:
-                self.logger.warning(f"No historical bars found for {symbol}")
-        except Exception as e:
-            self.logger.error(f"Error loading initial history: {e}")
-
     def get_current_price(self, symbol):
         try:
             # If we have a price from the WebSocket stream, use it
             if self.stream_ready and self.latest_price is not None:
                 self.logger.info("\nUsing real-time WebSocket price:")
                 self.logger.info(f"  Latest price: ${self.latest_price:,.2f}")
-                self.logger.info(f"  {MINUTE_SMA_WINDOW}-min SMA: ${self.minute_sma:,.2f}")
+                self.logger.info(f"  {len(self.minute_closes)}/{MINUTE_SMA_WINDOW}-min SMA: ${self.minute_sma:,.2f}")
                 return self.latest_price
                 
             # If WebSocket isn't ready yet, return None and wait

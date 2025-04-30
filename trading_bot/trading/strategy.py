@@ -11,13 +11,14 @@ class TradingStrategy:
         self.last_price = None
         self.price_history = []  # Store recent minute prices
         self.hourly_lows = []   # Store hourly lows
+        self.in_cooldown = False
 
     def analyze_hourly_pattern(self, current_price):
         """Analyze hourly price patterns"""
         try:
             hourly_prices = self.market_data.get_hourly_prices("BTC/USD")
             if not hourly_prices:
-                return None, None
+                return None, None, None  # Return three None values
 
             # Calculate hourly lows for the last 24 hours
             self.hourly_lows = []
@@ -32,16 +33,13 @@ class TradingStrategy:
             price_from_hour_low = ((current_price - last_hour_low) / last_hour_low) * 100
             hour_low_change = ((last_hour_low - prev_hour_low) / prev_hour_low) * 100
 
-            self.logger.info("\nHourly Low Analysis:")
-            self.logger.info(f"  Current Price: ${current_price:,.2f}")
-            self.logger.info(f"  Current Hour Low: ${last_hour_low:,.2f}")
-            self.logger.info(f"  Previous Hour Low: ${prev_hour_low:,.2f}")
-            self.logger.info(f"  % Above Current Hour Low: {price_from_hour_low:.2f}%")
-            self.logger.info(f"  Hour-to-Hour Low Change: {hour_low_change:.2f}%")
-
             # Calculate average hourly low
             avg_hourly_low = sum(self.hourly_lows) / len(self.hourly_lows)
-            self.logger.info(f"  24h Average Hour Low: ${avg_hourly_low:.2f}")
+
+            # More concise hourly analysis logging
+            self.logger.info(f"Hourly: Price ${current_price:,.2f} | Current Low ${last_hour_low:,.2f} | " +
+                            f"Prev Low ${prev_hour_low:,.2f} | +{price_from_hour_low:.2f}% from low | " +
+                            f"Low change {hour_low_change:.2f}% | 24h Avg ${avg_hourly_low:.2f}")
 
             return last_hour_low, price_from_hour_low, hour_low_change
 
@@ -97,11 +95,20 @@ class TradingStrategy:
 
     def execute(self, symbol, amount):
         try:
-            # throttle trades
+            # Check if we're in the cooldown period
             if self.last_trade_time:
                 elapsed = time.time() - self.last_trade_time
                 if elapsed < MIN_TRADE_INTERVAL:
-                    return False
+                    self.in_cooldown = True
+                    remaining = MIN_TRADE_INTERVAL - elapsed
+                    # Only log cooldown status every 30 seconds
+                    if int(remaining) % 30 == 0 or remaining < 10:
+                        self.logger.info(f"In trade cooldown: {remaining:.1f} seconds remaining")
+                else:
+                    # Cooldown period is over
+                    if self.in_cooldown:
+                        self.logger.info("Cooldown period ended, can place trades again")
+                        self.in_cooldown = False
 
             current_price = self.market_data.get_current_price(symbol)
             # Get the cached 500-bar SMA (already updated in get_current_price)
@@ -113,7 +120,7 @@ class TradingStrategy:
 
             buying_power = account_info['buying_power']
 
-            if buying_power >= amount and self.should_buy(current_price):
+            if buying_power >= amount and self.should_buy(current_price) and not self.in_cooldown:
                 self.logger.info("\n*** HOURLY LOW BUYING OPPORTUNITY ***")
                 order = self.trading_client.place_buy_order(symbol, amount)
                 if order:

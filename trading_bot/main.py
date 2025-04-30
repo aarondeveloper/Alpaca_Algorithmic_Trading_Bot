@@ -31,10 +31,13 @@ def main():
     logger.info(f"Trading {SYMBOL} with ${TRADE_AMOUNT} orders")
 
     while True:
-        if not strategy.execute(SYMBOL, TRADE_AMOUNT):
+        try:
+            # Always execute to keep monitoring prices, even during cooldown
+            strategy.execute(SYMBOL, TRADE_AMOUNT)
+            time.sleep(30)  # Check every 30 seconds instead of 10
+        except Exception as e:
+            logger.error(f"Error in main loop: {str(e)}")
             time.sleep(60)  # Wait longer on errors
-        else:
-            time.sleep(10)  # Normal operation delay
 
 if __name__ == "__main__":
     main() 
