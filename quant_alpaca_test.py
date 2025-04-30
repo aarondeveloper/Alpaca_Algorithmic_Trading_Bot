@@ -7,6 +7,7 @@ from alpaca.data.historical import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.live import CryptoDataStream
+import time
 
 # 1) Load API keys from .env
 load_dotenv()
@@ -61,8 +62,22 @@ stream.subscribe_daily_bars(handle_daily,    SYMBOL)
 
 # 6) Run the stream (blocks internally)
 if __name__ == "__main__":
-    try:
-        print("▶️  Starting CryptoDataStream…\n")
-        stream.run()
-    except Exception as e:
-        print("❌ Stream died with error:", e)
+    backoff = 10  # start with 10s
+    while True:
+        try:
+            print("▶️  Starting CryptoDataStream…\n")
+            stream.run()
+            # normally this never returns unless the socket closes
+        except ValueError as e:
+            msg = str(e)
+            # catch the 429 / connection limit exceeded
+            if "connection limit exceeded" in msg.lower():
+                print(f"⚠️  Connection limit exceeded. backing off {backoff}s…")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 300)  # max 5 minutes
+                continue
+            # other ValueErrors, re-raise
+            raise
+        except Exception as e:
+            print("❌ Stream died with error:", e)
+            break
