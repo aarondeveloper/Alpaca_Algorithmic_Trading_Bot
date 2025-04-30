@@ -17,4 +17,7 @@ MIN_TRADE_INTERVAL = 120  # 2 minutes
 # Strategy Parameters
 SMA_WINDOW = 24  # hours
 SMA_THRESHOLD = 0.95  # 5% below SMA
-PRICE_DROP_THRESHOLD = 1.0  # 1% price drop 
+PRICE_DROP_THRESHOLD = 1.0  # 1% price drop
+
+# How many 1-minute bars to use for our SMA
+MINUTE_SMA_WINDOW = 500 

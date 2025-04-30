@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta
-from config.settings import MIN_TRADE_INTERVAL
+from config.settings import MIN_TRADE_INTERVAL, MINUTE_SMA_WINDOW
 
 class TradingStrategy:
     def __init__(self, trading_client, market_data, logger):
@@ -97,14 +97,17 @@ class TradingStrategy:
 
     def execute(self, symbol, amount):
         try:
+            # throttle trades
             if self.last_trade_time:
-                time_since_last_trade = time.time() - self.last_trade_time
-                if time_since_last_trade < MIN_TRADE_INTERVAL:
+                elapsed = time.time() - self.last_trade_time
+                if elapsed < MIN_TRADE_INTERVAL:
                     return False
 
             current_price = self.market_data.get_current_price(symbol)
+            # Get the cached 500-bar SMA (already updated in get_current_price)
+            minute_sma = self.market_data.get_minute_sma(symbol)
+
             account_info = self.trading_client.get_account_info()
-            
             if not all([current_price, account_info]):
                 return False
 
