@@ -43,7 +43,7 @@ class MarketData:
                 self.stream_ready = True
             
             # More concise logging
-            self.logger.info(f"[STREAM] New bar: ${bar.close:,.2f} | {len(self.minute_closes)}/{MINUTE_SMA_WINDOW}-min SMA: ${self.minute_sma:,.2f}")
+            self.logger.info(f"NEW PRICE: ${bar.close:,.2f} | SMA ({len(self.minute_closes)}/{MINUTE_SMA_WINDOW}): ${self.minute_sma:,.2f}")
         
         async def handle_update(bar):
             self.latest_bar = bar

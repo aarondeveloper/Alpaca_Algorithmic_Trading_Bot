@@ -12,24 +12,45 @@ class TradingStrategy:
         self.price_history = []  # Store recent minute prices
         self.hourly_lows = []   # Store hourly lows
         self.in_cooldown = False
+        self.current_hour = None
+        self.current_hour_low = None
+        self.prev_hour_low = None
 
     def analyze_hourly_pattern(self, current_price):
         """Analyze hourly price patterns"""
         try:
-            hourly_prices = self.market_data.get_hourly_prices("BTC/USD")
-            if not hourly_prices:
-                return None, None, None  # Return three None values
-
-            # Calculate hourly lows for the last 24 hours
-            self.hourly_lows = []
-            for i in range(0, len(hourly_prices), 1):
-                self.hourly_lows.append(min(hourly_prices[i:i+1]))
-
-            # Get recent low prices
-            last_hour_low = self.hourly_lows[-1] if self.hourly_lows else current_price
-            prev_hour_low = self.hourly_lows[-2] if len(self.hourly_lows) > 1 else last_hour_low
+            # Get hourly bars for the last 24 hours
+            hourly_bars = self.trading_client.get_hourly_bars("BTC/USD", limit=24)
             
-            # Calculate price metrics
+            # Get the current hour
+            now = datetime.now().replace(minute=0, second=0, microsecond=0)
+            
+            # Check if we're in a new hour
+            if self.current_hour != now:
+                self.current_hour = now
+                self.logger.info(f"New hour started: {now.strftime('%Y-%m-%d %H:00')}")
+                
+                # Update previous hour low
+                if self.current_hour_low is not None:
+                    self.prev_hour_low = self.current_hour_low
+                
+                # Initialize current hour low from API data
+                self.current_hour_low = hourly_bars[-1].low
+            
+            # Update the current hour's low if real-time price is lower
+            if current_price < self.current_hour_low:
+                self.logger.info(f"Updating hourly low: ${self.current_hour_low:.2f} → ${current_price:.2f}")
+                self.current_hour_low = current_price
+            
+            # Store hourly lows for analysis
+            self.hourly_lows = [bar.low for bar in hourly_bars]
+            
+            if len(self.hourly_lows) < 2:
+                return None, None, None
+            
+            last_hour_low = self.current_hour_low  # Use our real-time updated low
+            prev_hour_low = self.prev_hour_low if self.prev_hour_low is not None else self.hourly_lows[1]
+            
             price_from_hour_low = ((current_price - last_hour_low) / last_hour_low) * 100
             hour_low_change = ((last_hour_low - prev_hour_low) / prev_hour_low) * 100
 
@@ -103,11 +124,11 @@ class TradingStrategy:
                     remaining = MIN_TRADE_INTERVAL - elapsed
                     # Only log cooldown status every 30 seconds
                     if int(remaining) % 30 == 0 or remaining < 10:
-                        self.logger.info(f"In trade cooldown: {remaining:.1f} seconds remaining")
+                        self.logger.info(f"COOLDOWN: {remaining:.1f} seconds remaining until next trade")
                 else:
                     # Cooldown period is over
                     if self.in_cooldown:
-                        self.logger.info("Cooldown period ended, can place trades again")
+                        self.logger.info("COOLDOWN ENDED: Bot can trade again")
                         self.in_cooldown = False
 
             current_price = self.market_data.get_current_price(symbol)
@@ -121,17 +142,19 @@ class TradingStrategy:
             buying_power = account_info['buying_power']
 
             if buying_power >= amount and self.should_buy(current_price) and not self.in_cooldown:
-                self.logger.info("\n*** HOURLY LOW BUYING OPPORTUNITY ***")
+                self.logger.info("TRADE SIGNAL: Price near hour's low and conditions met for buying")
                 order = self.trading_client.place_buy_order(symbol, amount)
                 if order:
                     self.last_trade_time = time.time()
                     self.logger.info(f"Next trade possible in: {MIN_TRADE_INTERVAL/60:.1f} minutes")
             else:
-                self.logger.info("\nWaiting for better hourly low entry")
+                if self.should_buy(current_price):
+                    self.logger.info("MONITORING: Conditions not ideal for trading yet")
+                return False
 
             self.last_price = current_price
             return True
 
         except Exception as e:
-            self.logger.error(f"\nError in trading strategy: {str(e)}")
+            self.logger.error(f"ERROR: Strategy execution failed: {str(e)}")
             return False 

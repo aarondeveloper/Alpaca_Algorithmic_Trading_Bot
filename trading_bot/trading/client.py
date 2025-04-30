@@ -1,11 +1,16 @@
 from alpaca.trading.client import TradingClient as AlpacaClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from datetime import datetime, timedelta
 from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, PAPER_TRADING
 
 class AlpacaTradingClient:
     def __init__(self, logger):
         self.client = AlpacaClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=PAPER_TRADING)
+        self.data_client = CryptoHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
         self.logger = logger
 
     def get_account_info(self):
@@ -22,26 +27,43 @@ class AlpacaTradingClient:
             return None
 
     def place_buy_order(self, symbol, amount):
+        """Place a market buy order"""
         try:
-            self.logger.info("\nPlacing Buy Order:")
-            self.logger.info(f"  Symbol: {symbol}")
-            self.logger.info(f"  Amount: ${amount}")
+            self.logger.info(f"PLACING ORDER: ${amount} of {symbol}")
             
-            order_data = MarketOrderRequest(
+            # Place a market order to buy with a notional value (dollar amount)
+            order = self.client.submit_order(
                 symbol=symbol,
                 notional=amount,  # Amount in dollars
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.GTC  # Good Till Cancelled
             )
             
-            order = self.client.submit_order(order_data)
-            
-            self.logger.info("\nOrder Submitted Successfully:")
-            self.logger.info(f"  Order ID: {order.id}")
-            self.logger.info(f"  Status: {order.status}")
-            self.logger.info(f"  Created At: {order.created_at}")
-            
-            return order
+            if order:
+                self.logger.info(f"ORDER PLACED: ID {order.id[:8]}... | Status: {order.status}")
+                return order
+            return None
         except Exception as e:
             self.logger.error(f"Error placing buy order: {str(e)}")
-            return None 
+            return None
+
+    def get_hourly_bars(self, symbol, limit=24):
+        """Get hourly bars for the specified symbol"""
+        try:
+            # Calculate start time based on limit
+            start_time = datetime.now() - timedelta(hours=limit)
+            
+            request = CryptoBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Hour,
+                start=start_time,
+                end=datetime.now()
+            )
+            
+            bars_response = self.data_client.get_crypto_bars(request)
+            
+            # Convert to list and return
+            return list(bars_response[symbol])
+        except Exception as e:
+            self.logger.error(f"Error getting hourly bars: {str(e)}")
+            return [] 
