@@ -15,15 +15,37 @@ class TradingStrategy:
         self.current_hour = None
         self.current_hour_low = None
         self.prev_hour_low = None
+        self.last_hourly_data_pull = 0  # Timestamp of last data pull
+        self.hourly_data_pull_interval = 300  # Pull data every 5 minutes (300 seconds)
 
     def analyze_hourly_pattern(self, current_price):
         """Analyze hourly price patterns"""
         try:
-            # Get hourly bars for the last 24 hours
-            hourly_bars = self.trading_client.get_hourly_bars("BTC/USD", limit=24)
-            
-            # Get the current hour
+            current_time = time.time()
             now = datetime.now().replace(minute=0, second=0, microsecond=0)
+            
+            # Only pull historical data at the start of a new hour or if it's been more than 5 minutes
+            pull_historical_data = (self.current_hour != now or 
+                                   (current_time - self.last_hourly_data_pull) > self.hourly_data_pull_interval)
+            
+            if pull_historical_data:
+                # Save our current real-time hourly low before pulling new data
+                saved_current_hour_low = self.current_hour_low
+                
+                # Get hourly bars for the last 24 hours
+                hourly_bars = self.trading_client.get_hourly_bars("BTC/USD", limit=24)
+                self.hourly_lows = [bar.low for bar in hourly_bars]
+                self.last_hourly_data_pull = current_time
+                self.logger.info("Updated historical hourly data from Alpaca")
+                
+                # If we already have a real-time hourly low for the current hour that's lower than what Alpaca returned,
+                # keep our real-time value instead of overwriting it
+                if self.current_hour is not None and self.current_hour == now and saved_current_hour_low is not None:
+                    api_current_hour_low = self.hourly_lows[0] if self.hourly_lows else float('inf')
+                    if saved_current_hour_low < api_current_hour_low:
+                        self.logger.info(f"Keeping real-time hourly low (${saved_current_hour_low:.2f}) which is lower than API data (${api_current_hour_low:.2f})")
+                        # Keep our real-time value but update the rest of the historical data
+                        self.current_hour_low = saved_current_hour_low
             
             # Check if we're in a new hour
             if self.current_hour != now:
@@ -34,16 +56,17 @@ class TradingStrategy:
                 if self.current_hour_low is not None:
                     self.prev_hour_low = self.current_hour_low
                 
-                # Initialize current hour low from API data
-                self.current_hour_low = hourly_bars[-1].low
+                # Initialize current hour low from API data if available
+                if self.hourly_lows:
+                    self.current_hour_low = self.hourly_lows[0]
+                else:
+                    # If no API data, use current price as starting point
+                    self.current_hour_low = current_price
             
             # Update the current hour's low if real-time price is lower
             if current_price < self.current_hour_low:
-                self.logger.info(f"Updating hourly low: ${self.current_hour_low:.2f} → ${current_price:.2f}")
+                self.logger.info(f"Updating hourly low: ${self.current_hour_low:.2f} to ${current_price:.2f}")
                 self.current_hour_low = current_price
-            
-            # Store hourly lows for analysis
-            self.hourly_lows = [bar.low for bar in hourly_bars]
             
             if len(self.hourly_lows) < 2:
                 return None, None, None

@@ -31,16 +31,19 @@ class AlpacaTradingClient:
         try:
             self.logger.info(f"PLACING ORDER: ${amount} of {symbol}")
             
-            # Place a market order to buy with a notional value (dollar amount)
-            order = self.client.submit_order(
+            # Create a market order request object
+            market_order_data = MarketOrderRequest(
                 symbol=symbol,
-                notional=amount,  # Amount in dollars
+                notional=amount,  # Convert dollar amount to quantity
                 side=OrderSide.BUY,
-                time_in_force=TimeInForce.GTC  # Good Till Cancelled
+                time_in_force=TimeInForce.GTC
             )
             
+            # Submit the order using the approach from the video
+            order = self.client.submit_order(market_order_data)
+            
             if order:
-                self.logger.info(f"ORDER PLACED: ID {order.id[:8]}... | Status: {order.status}")
+                self.logger.info(f"ORDER PLACED: ID {order.id} | Status: {order.status}")
                 return order
             return None
         except Exception as e:
